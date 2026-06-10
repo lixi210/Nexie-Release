@@ -1,4 +1,4 @@
-# Nexie vx.x.x - AI 编程智能体
+# Nexie v1.1.1 - AI 编程智能体
 Nexie(奈西,读音:/'neksi/,,,,中文昵称:力袭,寓意:努力逆袭)
 ## 🖥️ 桌面端
 文件：Nexie.zip
