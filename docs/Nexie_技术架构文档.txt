@@ -1,0 +1,212 @@
+Nexie — AI 编程智能体 技术架构文档
+========================================
+
+项目概述
+--------
+Nexie 是一个 AI 驱动的桌面编程智能体，通过 DeepSeek/MiMo 大模型实现自动化编程任务。
+基于 Python + Tkinter 构建，支持 PC 桌面、手机 App (WebSocket)、微信机器人三种交互通道。
+
+语言: Python 3.11
+UI框架: Tkinter (原生 Windows 窗口)
+AI模型: DeepSeek V4 Pro (主) / MiMo (视觉)
+打包: PyInstaller onefile -> 单文件 exe (~31MB)
+
+
+一、项目结构
+--------
+
+Nexie/
+├── main.py              # 入口：DPI、互斥锁、暗色标题栏、启动 MainWindow
+├── app_gui.py           # Tkinter GUI：聊天界面、权限弹窗、托盘、注入模式
+├── agent_core.py        # AI 核心调度：状态机、消息处理、工具执行、回滚
+├── client.py            # API 客户端：DeepSeek + MiMo、流式 SSE、重试/退避
+├── tools.py             # 传统工具集：桌面控制、文件操作、剪贴板等
+├── memory_manager.py    # 知识图谱记忆：实体+关系+事实+会话历史
+├── communication.py     # WebSocket 服务器：手机端双向通信 (端口 9527)
+├── mobile_bridge.py     # 手机桥接层：消息路由、权限代理、流推送
+├── wechat_bot.py        # 微信机器人：iLink API 登录、轮询、消息处理
+├── http_upload.py       # HTTP 文件服务：手机端上传下载 (端口 9528)
+├── relay_server.py      # 公网中继：跨网通信服务器 (部署到 VPS)
+├── qr_manager.py        # 二维码生成：手机扫码配对
+├── config_gui.py        # 配置界面：API 密钥、模型选择
+├── monitor_desktop.py   # 桌面监控
+├── requirements.txt     # Python 依赖 (13个包)
+├── app_icon.ico         # 应用图标
+├── _ctypes.pyd          # ctypes 扩展 (PyInstaller 打包用)
+├── libffi-8.dll         # libffi 运行时
+├── tcl86t.dll           # Tcl 8.6 运行时
+├── tk86t.dll            # Tk 8.6 运行时
+│
+└── nexie/               # 核心引擎包
+    ├── __init__.py          # 数据目录管理、日志、自动迁移
+    ├── tool_registry.py     # 插件式工具注册中心 (装饰器+单例)
+    ├── stability.py         # 稳定性模块：心跳、超时执行器、后台任务
+    ├── memory_layers.py     # 四层记忆：L1缓存/L2核心/L3压缩/L4归档
+    ├── api_resilience.py    # API 韧性：限流、拆分、退避、密钥池
+    ├── permission_system.py # 权限控制：三级风险、黑名单、管理员提升
+    ├── search_tools.py      # 搜索工具：ripgrep + 语义搜索
+    ├── task_queue.py        # FIFO 任务队列：UI/Worker 线程分离
+    ├── session_memory.py    # 长期记忆引擎：规则驱动、零 API 成本
+    ├── budget.py            # Token 预算追踪
+    ├── project_scanner.py   # 项目扫描
+    ├── upnp.py              # UPnP 端口映射
+    └── workspace.py         # 工作空间持久化
+
+
+二、启动流程
+--------
+
+main.py
+  ├─ 1. 环境设置: TCL/TK 路径、单实例互斥锁(Global\Nexie_SingleInstance_Mutex)
+  ├─ 2. DPI 感知: SetProcessDpiAwareness(1)
+  ├─ 3. 加载 .env (三个位置: exe旁 -> 项目根 -> %APPDATA%/Nexie/)
+  ├─ 4. 创建 tk.Tk() -> withdraw() 隐藏
+  ├─ 5. 实例化 MainWindow(root, api_key, model_type)
+  │     ├─ 实例化 AgentCore -> init_nexie() -> 加载 tool_registry + stability
+  │     ├─ 实例化 TaskQueue (容量5, 超时300s)
+  │     ├─ 启动 WebSocket 服务器 (communication.py, 端口9527)
+  │     ├─ 启动 HTTP 上传服务 (http_upload.py, 端口9528)
+  │     ├─ 设置系统托盘 (pystray)
+  │     └─ 启动 gui_queue 轮询 (root.after)
+  ├─ 6. 暗色标题栏: DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)
+  └─ 7. deiconify() -> mainloop()
+
+
+三、核心架构
+--------
+
+3.1 UI/Worker 线程分离
+~~~~~~~~~~~~~~~~~~~~~~
+
+用户输入 -> TaskQueue.enqueue()
+  └─ Worker线程 -> AgentCore.process_message()
+       ├─ on_text(delta) -> gui_queue.put("stream", delta)
+       ├─ on_tool_start(name, args) -> gui_queue.put("tool_start", ...)
+       ├─ on_tool_result(name, result) -> gui_queue.put("tool_result", ...)
+       └─ on_done() -> gui_queue.put("processing_done")
+
+UI线程: root.after(50ms) -> _poll_queue() -> 从 gui_queue 取消息更新 Tk 组件
+
+3.2 API 调用链路
+~~~~~~~~~~~~~~~~
+
+AgentCore.process_message()
+  └─ DeepSeekClient.chat(messages, tools, stream=True, on_chunk)
+       ├─ APIKeyPool.get_key() -> 获取可用密钥
+       ├─ OpenAI SDK -> POST https://api.deepseek.com/v1/chat/completions
+       ├─ StreamWatchdog(45s) -> 心跳监控 SSE 流
+       ├─ on_chunk(delta_content, tool_calls_acc, reasoning_delta)
+       └─ 异常 -> 退避重试 -> 切换密钥 -> 最多5次全局重试
+
+3.3 工具执行链路
+~~~~~~~~~~~~~~~~
+
+AI 返回 tool_calls -> AgentCore._execute_tool(name, params)
+  ├─ 1. 黑名单检查 (permission_system.py)
+  ├─ 2. 风险等级确认 (safe/moderate/high)
+  │     └─ 权限钩子 -> PC弹窗 或 手机推送
+  ├─ 3. 管理员权限检测 (如需提权 -> runas)
+  ├─ 4. ToolRegistry.execute(name, params)
+  │     └─ 超时控制 + 指数退避重试
+  └─ 5. 结果回传给 API -> 下一轮对话
+
+
+四、四层记忆架构
+--------
+
+层级  名称        容量           触发条件              实现
+L1    临时缓存    200文件/24h    工具返回 >8000字符     gzip 压缩到 l1_cache/, 上下文只存摘要
+L2    核心记忆    无限(持久)     importance>=7          JSON 持久化, 注入 system prompt
+L3    自动压缩    128K -> 压缩   87% 上下文阈值         保留首尾+压缩中间, 内容感知摘要
+L4    冷归档      500MB 磁盘     会话结束              gzip 分片, 关键词检索按需载入
+
+
+五、权限系统
+--------
+
+三级风险:
+  safe     - 不弹窗，直接执行          (读文件、搜索、截图)
+  moderate - 弹窗可勾"始终允许"        (写文件、移动文件)
+  high     - 每次必弹窗               (run_command)
+
+黑名单 (18条规则):
+  拦截: rm -rf、format、diskpart、shutdown、reg delete、chmod 777、注册表删除等
+
+管理员提升:
+  - 检测需要管理员权限的操作
+  - 非管理员 -> ShellExecute(runas) 单命令提权
+  - 已管理员 -> 直接 subprocess
+
+
+六、通信架构
+--------
+
+三通道并行:
+  ┌─────────────┐     WebSocket(:9527)     ┌──────────┐
+  │  Nexie PC   │ <======================> │  手机App  │
+  │  (Python)   │     AES-256-GCM 加密     │ (uni-app) │
+  │             │                          │          │
+  │             │     HTTP(:9528)          │          │
+  │             │ <======================> │          │
+  │             │     文件上传/下载         │          │
+  │             │                          └──────────┘
+  │             │     iLink Bot API
+  │             │ <======================>  微信用户
+  └─────────────┘     HTTPS 长轮询
+
+WebSocket 消息类型 (12种):
+  auth, auth_ok, chat, file, screenshot, heartbeat, heartbeat_ack,
+  command, command_result, status, error, disconnect, ack
+
+跨网方案:
+  - 局域网: 手机直连 PC_IP:9527
+  - 手机热点: 最理想移动场景 (局域网+微信全功能)
+  - 公网: relay_server.py 部署到 VPS -> 房间隔离 + 消息中继
+
+
+七、API 韧性体系
+--------
+
+限流 (RateLimiter):
+  - 滑动窗口: 30次/分钟 + 500次/小时
+  - 最小间隔: 500ms
+
+密钥池 (APIKeyPool):
+  - 支持 DEEPSEEK_API_KEY_2 ~ _10
+  - 连续3次失败 -> 冷却300s
+  - 自动轮询
+
+退避重试 (ExponentialBackoff):
+  - 2s 基础 -> 120s 上限
+  - 5次重试, 30%随机抖动
+  - 400错误不重试 (消息格式问题)
+  - 429/401/403 -> 切换密钥
+
+SSE 心跳 (StreamWatchdog):
+  - 45s 无 chunk -> 触发重连
+
+
+八、线程模型
+--------
+
+主线程         Tkinter 事件循环 (仅 UI)
+Worker 线程    TaskQueue -> AgentCore.process_message()
+WS 服务线程    asyncio 事件循环 (NexieServer)
+HTTP 服务线程  HttpUploadServer.serve_forever()
+心跳线程       HeartbeatMonitor._loop()
+微信轮询线程   WeChatBot._poll_loop()
+
+所有跨线程通信通过 queue.Queue + root.after 保证 Tkinter 线程安全。
+
+
+九、关键技术栈
+--------
+
+AI SDK:       OpenAI Python SDK (兼容 DeepSeek API)
+GUI:          Tkinter + ttk (原生 Windows 暗色主题)
+系统托盘:     pystray + PIL
+WebSocket:    websockets (asyncio)
+加密:         AES-256-GCM (cryptography)
+桌面自动化:   pyautogui + mss + pyperclip
+打包:         PyInstaller (--onefile --windowed)
+HTTP:         http.server (标准库) + httpx (异步客户端)

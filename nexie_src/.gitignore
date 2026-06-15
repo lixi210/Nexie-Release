@@ -1,0 +1,12 @@
+.env
+*.bak
+*.pyc
+__pycache__/
+build/
+dist/
+venv/
+*.pyd
+*.dll
+Nexie_data/
+Iagent_data/
+lib/
