@@ -1,11 +1,24 @@
 # Nexie — AI 编程智能体
 
-[![Version](https://img.shields.io/badge/version-v1.1.1-blue)](https://github.com/lixi210/Nexie-Release/releases)
+[![Version](https://img.shields.io/badge/version-v1.1.2-blue)](https://github.com/lixi210/Nexie-Release/releases)
 [![Python](https://img.shields.io/badge/python-3.11-green)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)](.)
 [![License](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
 **Nexie**（奈西，读音 `/ˈneksi/`，中文昵称：力袭，寓意"努力逆袭"）是一个 AI 驱动的桌面编程智能体，基于 **DeepSeek V4 Pro / MiMo 视觉大模型**，能够理解自然语言指令并自动执行编程任务——代码生成、调试、文件管理、Git 操作、数据库查询、系统控制等。
+
+> ⚠️ **v1.1.2 为最终版本，项目不再维护。源码已永久开放，欢迎 Fork 继续开发。**
+
+---
+
+## 📦 文件清单
+
+| 文件 | 大小 | 类型 |
+|------|------|------|
+| `Nexie.zip` | ~29 MB | 🖥️ **打包程序** — Windows 桌面端完整包，解压即用 |
+| `Nexie-mobile.zip` | ~25 MB | 📱 **打包程序** — 移动端桥梁模块 |
+| `NexieSource.zip` | ~39 MB | 📂 **源码** — 完整 Python 源代码（含依赖 DLL） |
+| `nexie_src/` | — | 📂 **源码** — 源码目录，可直接 `pip install` 运行 |
 
 ---
 
